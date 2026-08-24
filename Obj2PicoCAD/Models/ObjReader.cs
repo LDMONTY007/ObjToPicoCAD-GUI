@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Numerics;
 using System.Text;
 
 namespace Obj2PicoCAD.Models
@@ -23,7 +24,9 @@ namespace Obj2PicoCAD.Models
             float maxX = -20000, minX = 20000, maxY = -20000, minY = 20000, maxZ = -20000, minZ = 20000;
 
             var v = new List<Vector3>();
+            var vt = new List<Vector2>();           // Added UV coordinates container
             var f = new List<List<int>>();
+            var f_uv = new List<List<int>>();        // Added face UV indices container
 
             _meshMode = meshMode;
 
@@ -31,7 +34,7 @@ namespace Obj2PicoCAD.Models
             {
                 using (StreamReader sr = new StreamReader(path))
                 {
-                    ReadObj(sr, v, f, ref maxX, ref minX, ref maxY, ref minY, ref maxZ, ref minZ);
+                    ReadObj(sr, v, vt, f, f_uv, ref maxX, ref minX, ref maxY, ref minY, ref maxZ, ref minZ);
                 }
             }
             catch (IOException ex)
@@ -44,17 +47,32 @@ namespace Obj2PicoCAD.Models
             float boundingMax = Math.Max(Math.Max(Math.Abs(maxX - minX), Math.Abs(maxY - minY)), Math.Abs(maxZ - minZ));
             float size = boundingMax == 0 ? size0 : size0 / boundingMax;
 
-            WriteToTxt(exportPath, size, v, f);
+            WriteToTxt(exportFilePath: exportPath, size: size, v: v, vt: vt, f: f, f_uv: f_uv);
         }
 
-        private void ReadObj(StreamReader sr, List<Vector3> v, List<List<int>> f, ref float maxX, ref float minX, ref float maxY,
-            ref float minY, ref float maxZ, ref float minZ)
+        private void ReadObj(StreamReader sr, List<Vector3> v, List<Vector2> vt, List<List<int>> f, List<List<int>> f_uv,
+            ref float maxX, ref float minX, ref float maxY, ref float minY, ref float maxZ, ref float minZ)
         {
             while (sr.Peek() >= 0)
             {
                 var line = sr.ReadLine() ?? string.Empty;
 
-                if (line.StartsWith("v "))
+                // 1. Parse Texture Coordinates (vt u v)
+                if (line.StartsWith("vt "))
+                {
+                    string[] parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 3)
+                    {
+                        if (float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float u) &&
+                            float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float vCoord))
+                        {
+                            // Invert V coordinate since picoCAD measures UVs top-to-bottom
+                            vt.Add(new Vector2(u, 1.0f - vCoord));
+                        }
+                    }
+                }
+                // 2. Parse Geometric Vertices (v x y z)
+                else if (line.StartsWith("v "))
                 {
                     string[] parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                     if (parts.Length >= 4)
@@ -68,31 +86,40 @@ namespace Obj2PicoCAD.Models
                         }
                     }
                 }
+                // 3. Parse Faces (f v1/vt1/vn1 v2/vt2/vn2 ...)
                 else if (line.StartsWith("f "))
                 {
                     var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                     var f0 = new List<int>();
+                    var f_uv0 = new List<int>();
+
                     for (int i = 1; i < parts.Length; i++)
                     {
                         var components = parts[i].Split('/');
 
-                        if (components.Length >= 1)
+                        // Extract Vertex index
+                        if (components.Length >= 1 && int.TryParse(components[0], out int vIndex))
                         {
-                            if (int.TryParse(components[0], out int index))
-                            {
-                                f0.Add(index);
-                            }
+                            f0.Add(vIndex);
+                        }
+
+                        // Extract UV index
+                        if (components.Length >= 2 && int.TryParse(components[1], out int uvIndex))
+                        {
+                            f_uv0.Add(uvIndex);
                         }
                     }
+
                     if (f0.Count > 0)
                     {
                         f.Add(f0);
+                        f_uv.Add(f_uv0);
                     }
                 }
             }
         }
 
-        private void WriteToTxt(string exportFilePath, float size, List<Vector3> v, List<List<int>> f)
+        private void WriteToTxt(string exportFilePath, float size, List<Vector3> v, List<Vector2> vt, List<List<int>> f, List<List<int>> f_uv)
         {
             var filename = Path.GetFileNameWithoutExtension(exportFilePath);
 
@@ -172,6 +199,8 @@ namespace Obj2PicoCAD.Models
                 sb.Append("            \"vertex_ids\": [");
 
                 List<int> faceIndices = f[i];
+                List<int> uvIndices = f_uv[i];
+
                 for (int j = 0; j < faceIndices.Count; j++)
                 {
                     int idx = (_meshMode == 0) ? faceIndices[j] : faceIndices[faceIndices.Count - 1 - j];
@@ -180,11 +209,24 @@ namespace Obj2PicoCAD.Models
                 }
                 sb.AppendLine("],");
 
+                // Mapping Real UV Coordinates
                 sb.Append("            \"uvs\": [");
                 for (int j = 0; j < faceIndices.Count; j++)
                 {
-                    List<float> d = Utilities.En(faceIndices.Count, j, 1);
-                    sb.Append(string.Format(CultureInfo.InvariantCulture, "{0:0.###},{1:0.###}", d[0], d[1]));
+                    int idx = (_meshMode == 0) ? j : (faceIndices.Count - 1 - j);
+
+                    if (idx < uvIndices.Count && (uvIndices[idx] - 1) < vt.Count)
+                    {
+                        // Convert 1-based OBJ index to 0-based List index
+                        Vector2 uv = vt[uvIndices[idx] - 1];
+                        sb.Append(string.Format(CultureInfo.InvariantCulture, "{0:0.###},{1:0.###}", uv.X, uv.Y));
+                    }
+                    else
+                    {
+                        // Fallback if missing
+                        sb.Append("0,0");
+                    }
+
                     if (j + 1 < faceIndices.Count) sb.Append(",");
                 }
                 sb.AppendLine("],");
@@ -203,13 +245,12 @@ namespace Obj2PicoCAD.Models
             sb.AppendLine("    \"visible\": true, \"locked\": false");
             sb.AppendLine("  },");
 
-            // 4. Clean Single-line Texture Payload
+            // 4. Texture Payload
             sb.AppendLine("  \"texture\": {");
             sb.AppendLine("    \"shade_pal_1\": [0,1,2,3,2,5,3,2,8,4,4,5,6,6,10,12],");
             sb.AppendLine($"    \"background_color\": {BgColorIndex},");
             sb.AppendLine("    \"colors\": [[0,0,0],[0.11372549019608,0.16862745098039,0.32549019607843],[0.49411764705882,0.14509803921569,0.32549019607843],[0.37254901960784,0.34117647058824,0.30980392156863],[0.67058823529412,0.32156862745098,0.21176470588235],[0,0.52941176470588,0.31764705882353],[0.51372549019608,0.46274509803922,0.61176470588235],[1,0,0.30196078431373],[0.16078431372549,0.67843137254902,1],[1,0.46666666666667,0.65882352941176],[1,0.63921568627451,0],[0,0.89411764705882,0.21176470588235],[0.76078431372549,0.76470588235294,0.78039215686275],[1,0.8,0.66666666666667],[1,0.92549019607843,0.15294117647059],[1,0.94509803921569,0.90980392156863]],");
 
-            // Exactly 16,384 hex characters on a single string, representing a 128x128 grid:
             string defaultPixels = new string('c', 16384);
             sb.AppendLine($"    \"pixels\": \"{defaultPixels}\",");
 
