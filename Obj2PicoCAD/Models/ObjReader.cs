@@ -24,9 +24,9 @@ namespace Obj2PicoCAD.Models
             float maxX = -20000, minX = 20000, maxY = -20000, minY = 20000, maxZ = -20000, minZ = 20000;
 
             var v = new List<Vector3>();
-            var vt = new List<Vector2>();           // Added UV coordinates container
+            var vt = new List<Vector2>();
             var f = new List<List<int>>();
-            var f_uv = new List<List<int>>();        // Added face UV indices container
+            var f_uv = new List<List<int>>();
 
             _meshMode = meshMode;
 
@@ -47,7 +47,7 @@ namespace Obj2PicoCAD.Models
             float boundingMax = Math.Max(Math.Max(Math.Abs(maxX - minX), Math.Abs(maxY - minY)), Math.Abs(maxZ - minZ));
             float size = boundingMax == 0 ? size0 : size0 / boundingMax;
 
-            WriteToTxt(exportFilePath: exportPath, size: size, v: v, vt: vt, f: f, f_uv: f_uv);
+            WriteToTxt(exportPath, size, v, vt, f, f_uv);
         }
 
         private void ReadObj(StreamReader sr, List<Vector3> v, List<Vector2> vt, List<List<int>> f, List<List<int>> f_uv,
@@ -57,7 +57,7 @@ namespace Obj2PicoCAD.Models
             {
                 var line = sr.ReadLine() ?? string.Empty;
 
-                // 1. Parse Texture Coordinates (vt u v)
+                // 1. Parse UV Coordinates (vt u v)
                 if (line.StartsWith("vt "))
                 {
                     string[] parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
@@ -66,12 +66,11 @@ namespace Obj2PicoCAD.Models
                         if (float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float u) &&
                             float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float vCoord))
                         {
-                            // Invert V coordinate since picoCAD measures UVs top-to-bottom
-                            vt.Add(new Vector2(u, 1.0f - vCoord));
+                            vt.Add(new Vector2(u, vCoord));
                         }
                     }
                 }
-                // 2. Parse Geometric Vertices (v x y z)
+                // 2. Parse Vertices (v x y z)
                 else if (line.StartsWith("v "))
                 {
                     string[] parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
@@ -97,16 +96,20 @@ namespace Obj2PicoCAD.Models
                     {
                         var components = parts[i].Split('/');
 
-                        // Extract Vertex index
+                        // Vertex index
                         if (components.Length >= 1 && int.TryParse(components[0], out int vIndex))
                         {
                             f0.Add(vIndex);
                         }
 
-                        // Extract UV index
+                        // UV index (Fallback to 0 if absent or malformed)
                         if (components.Length >= 2 && int.TryParse(components[1], out int uvIndex))
                         {
                             f_uv0.Add(uvIndex);
+                        }
+                        else
+                        {
+                            f_uv0.Add(0);
                         }
                     }
 
@@ -209,21 +212,21 @@ namespace Obj2PicoCAD.Models
                 }
                 sb.AppendLine("],");
 
-                // Mapping Real UV Coordinates
+                // Write UV coordinates mapped symmetrically with vertex orientation
                 sb.Append("            \"uvs\": [");
                 for (int j = 0; j < faceIndices.Count; j++)
                 {
                     int idx = (_meshMode == 0) ? j : (faceIndices.Count - 1 - j);
 
-                    if (idx < uvIndices.Count && (uvIndices[idx] - 1) < vt.Count)
+                    int uvIndex = (idx < uvIndices.Count) ? uvIndices[idx] : 0;
+
+                    if (uvIndex > 0 && (uvIndex - 1) < vt.Count)
                     {
-                        // Convert 1-based OBJ index to 0-based List index
-                        Vector2 uv = vt[uvIndices[idx] - 1];
+                        Vector2 uv = vt[uvIndex - 1];
                         sb.Append(string.Format(CultureInfo.InvariantCulture, "{0:0.###},{1:0.###}", uv.X, uv.Y));
                     }
                     else
                     {
-                        // Fallback if missing
                         sb.Append("0,0");
                     }
 
