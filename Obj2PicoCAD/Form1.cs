@@ -81,13 +81,54 @@ namespace Obj2PicoCAD
 			RecentFilesHandler.AddRecentFile(recent);
 			AddRecentFileToList(recent);
 
-			
-			//check if file directory is opend if not open directory and select the file
-			Utilities.ShowInExplorer(exportPath);
+
+            //check if file directory is opend if not open directory and select the file
+            OpenExportFolder(exportPath);
 
 		}
 
-		private void objBrowseBtn_Click(object sender, EventArgs e)
+
+        private void OpenExportFolder(string outputPath)
+        {
+            if (string.IsNullOrWhiteSpace(outputPath))
+                return;
+
+            // Get directory path from export file path.
+            string folderPath = File.Exists(outputPath)
+                ? Path.GetDirectoryName(outputPath)
+                : (Directory.Exists(outputPath) ? outputPath : null);
+
+            if (string.IsNullOrEmpty(folderPath))
+                return;
+
+            //if the folder is already open, just bring it
+			//back up to focus.
+            if (FolderHelper.FocusIfFolderOpen(folderPath))
+            {
+                Debug.WriteLine("Explorer window already exists. Focused existing window.");
+                return;
+            }
+
+            //Try to open a new explorer window
+			//at the export path.
+            try
+            {
+                if (File.Exists(outputPath))
+                {
+                    Process.Start("explorer.exe", $"/select,\"{outputPath}\"");
+                }
+                else if (Directory.Exists(folderPath))
+                {
+                    Process.Start("explorer.exe", $"\"{folderPath}\"");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to open Explorer: {ex.Message}");
+            }
+        }
+
+        private void objBrowseBtn_Click(object sender, EventArgs e)
 		{
 			//open file dialoge and select obj file 
 			OpenFileDialog openFileDialog = new OpenFileDialog();

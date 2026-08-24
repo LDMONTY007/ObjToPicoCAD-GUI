@@ -11,7 +11,7 @@ namespace Obj2PicoCAD.Utils
 
 
 		[DllImport("user32.dll")]
-		private static extern bool SetForegroundWindow(IntPtr Hwnd);
+		public static extern bool SetForegroundWindow(IntPtr Hwnd);
 
 		[DllImport("user32.dll")]
 		private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
